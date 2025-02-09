@@ -12,25 +12,25 @@ export interface Data {
 export class DataContainer {
 	protected _dataArray: Data[] = [];
 
-	addData(data: Data){
+	addData(data: Data) {
 		this._dataArray = [...this._dataArray, data];
 	}
 
 	getDataFromName(name: string): Data | undefined {
 		return this._dataArray.find((data) => data.name === name);
-	};
+	}
 
-	split(chunksize: number = 500, separator: string = "\n\n") {
+	split(chunksize: number = 500, separator: string = '\n\n') {
 		const newDataArray: Data[] = [];
 		for (const data of this._dataArray) {
 			const chunks = data.content.split(separator);
-			let remaining = "";
+			let remaining = '';
 			for (let i = 0; i < chunks.length; i++) {
 				if (remaining.length > 0 && remaining.length + chunks[i].length > chunksize) {
 					newDataArray.push({
 						name: data.name,
 						content: remaining,
-						url: data.url,
+						url: data.url
 					});
 					remaining = chunks[i];
 				} else {
@@ -41,7 +41,7 @@ export class DataContainer {
 				newDataArray.push({
 					name: data.name,
 					content: remaining,
-					url: data.url,
+					url: data.url
 				});
 			}
 		}

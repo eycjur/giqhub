@@ -1,44 +1,73 @@
-import type { DataSource } from "./interface";
-import { DataContainer } from "./interface";
-import { Octokit } from "@octokit/rest";
-import { SessionStorageCache } from "$lib/cache/sessionStorageCache";
-import { Buffer } from 'buffer'
+import type { Data, DataSource } from './interface';
+import { DataContainer } from './interface';
+import { Octokit } from '@octokit/rest';
+import { Buffer } from 'buffer';
+import { showTemporaryModal } from '$lib/components/showModal';
+import * as m from '$lib/paraglide/messages';
+import { IndexedDBCache } from '$lib/cache/indexedDBCache';
 
+export function generateCachedOctokit(githubApiKey: string) {
+	const octokit = new Octokit({ auth: githubApiKey });
+	const cache = new IndexedDBCache();
 
-export function generateCachedOctokit() {
-	let octokit = new Octokit();
-	let cache = new SessionStorageCache();
-
-	let originalGetTree = octokit.rest.git.getTree;
-	// @ts-ignore
+	const originalGetTree = octokit.rest.git.getTree;
+	// @ts-expect-error: cache function receives any type
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	octokit.rest.git.getTree = async function (params: any) {
-		let key = JSON.stringify(params);
-		let data = cache.get(key);
+		const key = JSON.stringify(params);
+		const data = await cache.get(key);
 		if (data !== null) {
-			console.log(`[octokit.rest.git.getTree] load from cache: ${key}`);
+			console.log(`load from cache: octokit.rest.git.getTree`);
 			return JSON.parse(data);
 		}
-		let result = await originalGetTree(params);
+		const result = await originalGetTree(params);
 		cache.set(key, JSON.stringify(result));
 		return result;
 	};
 
-	let originalGetContent = octokit.rest.repos.getContent;
-	// @ts-ignore
+	const originalGetContent = octokit.rest.repos.getContent;
+	// @ts-expect-error: cache function receives any type
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	octokit.rest.repos.getContent = async function (params: any) {
-		let key = JSON.stringify(params);
-		let data = cache.get(key);
+		const key = JSON.stringify(params);
+		const data = await cache.get(key);
 		if (data !== null) {
-			console.log(`[octokit.rest.repos.getContent] load from cache: ${key}`);
+			console.log(`load from cache: octokit.rest.repos.getContent`);
 			return JSON.parse(data);
 		}
-		let result = await originalGetContent(params);
+		const result = await originalGetContent(params);
 		cache.set(key, JSON.stringify(result));
+		console.log(`result: ${JSON.stringify(result)}`);
 		return result;
 	};
 	return octokit;
 }
 
+type tree = {
+	path?: string;
+	mode?: string;
+	type?: string;
+	sha?: string;
+	size?: number;
+	url?: string;
+};
+
+function sortTreeByExt(tree: tree[]) {
+	const exts = tree.map((item: tree) => item.path?.split('.').pop());
+	const ext_map_count = new Map();
+	exts.forEach((ext?: string) => {
+		ext_map_count.set(ext, (ext_map_count.get(ext) || 0) + 1);
+	});
+	const exts_sorted = Array.from(ext_map_count).sort((a, b) => b[1] - a[1]);
+
+	let newTree: tree[] = [];
+	for (let i = 0; i < exts_sorted.length; i++) {
+		const ext = exts_sorted[i][0];
+		const items = tree.filter((item: tree) => item.path?.split('.').pop() === ext);
+		newTree = newTree.concat(items);
+	}
+	return newTree;
+}
 
 export class GitHubDataSource implements DataSource {
 	private _octokit: Octokit;
@@ -46,19 +75,15 @@ export class GitHubDataSource implements DataSource {
 	private _owner: string;
 	private _repo: string;
 	private _rateLimitWithBuffer: number;
-	private _description: string = "No description";
+	private _description: string = 'No description';
 
-	constructor(owner: string, repo: string, octokit: Octokit | null = null, rateLimitWithBuffer: number = 50) {
+	constructor(owner: string, repo: string, octokit: Octokit, rateLimitWithBuffer: number = 50) {
 		this._owner = owner;
 		this._repo = repo;
-		if (octokit) {
-			this._octokit = octokit;
-		} else {
-			this._octokit = new Octokit();
-		}
+		this._octokit = octokit;
 		this._rateLimitWithBuffer = rateLimitWithBuffer;
 
-		this._dataContainer  = new DataContainer();
+		this._dataContainer = new DataContainer();
 	}
 
 	get description() {
@@ -71,51 +96,83 @@ export class GitHubDataSource implements DataSource {
 
 	async fetchData() {
 		try {
-			let data;
-			let recursive_choice = [-1, 5, 3, 2, 1];
-			for (let recursive of recursive_choice) {
-				let result = await this._octokit.rest.git.getTree({
-					owner: this._owner,
-					repo: this._repo,
-					tree_sha: "main",
-					recursive: `${recursive}`,
-				});
-				data = result.data;
-				if (data.tree.length < this._rateLimitWithBuffer) {
-					break;
-				}
-			}
+			const { data } = await this._octokit.rest.git.getTree({
+				owner: this._owner,
+				repo: this._repo,
+				tree_sha: 'main',
+				recursive: 'true'
+			});
 			if (!data) {
-				console.error("Failed to get data from GitHub");
+				console.error('Failed to get data from GitHub');
 				return;
 			}
-			for (const item of data.tree) {
-				if (item.type !== "blob" || !item.path) {
-					continue;
-				}
-				const content = await this._octokit.rest.repos.getContent({
-					owner: this._owner,
-					repo: this._repo,
-					path: item.path,
-				});
-				if (!("content" in content.data)) {
-					continue;
-				}
-				this._dataContainer.addData({
-					name: item.path,
-					content: new (Buffer as any).from(content.data.content, content.data.encoding).toString(),
-					url: `https://github.com/${this._owner}/${this._repo}/blob/main/${item.path}`,
-				});
-				if (this._dataContainer.data.length >= this._rateLimitWithBuffer) {
-					break;
-				}
+			let tree = data.tree.filter((item: tree) => item.type === 'blob');
+
+			if (tree.length > this._rateLimitWithBuffer) {
+				tree = sortTreeByExt(tree);
+				// Bring the md file first
+				tree = [
+					...tree.filter((item) => item.path?.split('.').pop() === 'md'),
+					...tree.filter((item) => item.path?.split('.').pop() !== 'md')
+				];
+				tree = tree.slice(0, this._rateLimitWithBuffer);
 			}
 
-		} catch (error) {
+			// Get content asynchronously
+			// @ts-expect-error: promise array
+			const results: Array<Error | null | Data> = await Promise.all(
+				tree.map(async (item) => {
+					if (!item.path) {
+						return null;
+					}
+					try {
+						const content = await this._octokit.rest.repos.getContent({
+							owner: this._owner,
+							repo: this._repo,
+							path: item.path
+						});
+						if (!('content' in content.data)) {
+							return null;
+						}
+						return {
+							name: item.path,
+							// eslint-disable-next-line @typescript-eslint/no-explicit-any
+							content: new (Buffer as any).from(
+								content.data.content,
+								content.data.encoding
+							).toString(),
+							url: `https://github.com/${this._owner}/${this._repo}/blob/main/${item.path}`
+						};
+					} catch (error) {
+						return error;
+					}
+				})
+			);
+			for (const result of results) {
+				if (!(result instanceof Error) && result !== null) {
+					this._dataContainer.addData(result);
+				}
+			}
+			const results_error = results.filter((data) => data instanceof Error);
+			if (results_error.length > 0) {
+				throw results_error[0];
+			}
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		} catch (error: any) {
 			console.error(error);
+			if (error.toString().includes('API rate limit exceeded')) {
+				showTemporaryModal(m.github_ratelimit_exceeded(), 'red', 3000);
+			} else if (error.toString().includes('Bad credentials')) {
+				showTemporaryModal(m.github_bad_credentials(), 'red', 3000);
+			} else {
+				showTemporaryModal(`GitHub API Error: ${error.response.data.message}`, 'red', 3000);
+			}
 		}
 
-		const readme = this._dataContainer.getDataFromName("README.md") || this._dataContainer.getDataFromName("readme.md") || this._dataContainer.getDataFromName("Readme.md");
+		const readme =
+			this._dataContainer.getDataFromName('README.md') ||
+			this._dataContainer.getDataFromName('readme.md') ||
+			this._dataContainer.getDataFromName('Readme.md');
 		if (readme) {
 			this._description = readme.content;
 		}

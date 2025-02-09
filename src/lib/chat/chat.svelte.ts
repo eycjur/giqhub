@@ -1,8 +1,8 @@
-import type { Data } from "$lib/datasource/interface";
+import type { Data } from '$lib/datasource/interface';
 
 export class BaseMessage {
 	public role: string;
-	public content: string = $state("");
+	public content: string = $state('');
 	public references: Array<Data>;
 
 	constructor(role: string, content: string, references: Array<Data> = []) {
@@ -12,7 +12,7 @@ export class BaseMessage {
 	}
 
 	getUniqueNameReferences(): Array<Data> {
-		return this.references.filter((v, i, a) => a.findIndex(t => (t.name === v.name)) === i);
+		return this.references.filter((v, i, a) => a.findIndex((t) => t.name === v.name) === i);
 	}
 }
 
@@ -47,5 +47,9 @@ export class ChatHistory {
 
 	get history(): Array<BaseMessage> {
 		return this._history;
+	}
+
+	clear() {
+		this._history = [];
 	}
 }
