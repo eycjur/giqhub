@@ -1,23 +1,51 @@
-# giqhub
+# 🚀 giqhub – Ask About GitHub Repositories Easily & for Free!
 
-giqhub is a free, open-source service that allows you to perform Retrieval Augmented Generation (RAG) on GitHub repositories.
+[🔗 Try it now!](https://giqhub.com/eycjur/giqhub) | 🇯🇵 [日本語](README.ja.md)
 
-## How it works
+[![CI](https://github.com/eycjur/giqhub/actions/workflows/ci.yml/badge.svg)](https://github.com/eycjur/giqhub/actions/workflows/ci.yml)
+[![Pages](https://github.com/eycjur/giqhub/actions/workflows/gh-pages.yml/badge.svg)](https://github.com/eycjur/giqhub/actions/workflows/gh-pages.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-giqhub is a simple service that lets you perform RAG on any public GitHub repository. Just replace the 't' in 'github' with a 'q' in the URL, and you're good to go!
+![giqhub](static/ogpimage.png)
 
-For example, if you want to perform RAG on the repository `https://github.com/owner/repo`, you would use the following URL: `https://giqhub.com/owner/repo`.
+**giqhub** is a free, open-source service that allows you to ask questions about public GitHub repositories effortlessly. Whether you're unsure about a repo’s contents or want to understand the intent behind some code, giqhub makes it easy to get answers and deepen your understanding. **Fast, simple, and free** – anyone can use it! 🎉
 
-## Features
+## 🔥 How It Works
 
--   Free and open-source
--   Easy to use
--   Performs RAG on any public GitHub repository
+Using **giqhub** is **super easy** – just tweak the URL! Swap the `'t'` in `'github'` with a `'q'`, and you're in! 💥
 
-## Contributing
+🔗 **Example:**
 
-Contributions are welcome! Please feel free to submit a pull request.
+- Regular GitHub repo: `https://github.com/owner/repo`
+- With giqhub: `https://giqhub.com/owner/repo`
 
-## License
+Click the link, and you're ready to start exploring! 🚀
 
-This project is licensed under the MIT License.
+## ✨ Why Choose giqhub?
+
+✅ **100% Free & Open-Source** – No sign-ups, no paywalls. Just use it.  
+✅ **Ridiculously Simple** – A tiny URL change is all it takes!  
+✅ **Works with Any Public GitHub Repo** – Get insights instantly.
+
+## 🎬 Try It Yourself
+
+Want to see giqhub in action?  
+👉 [Give it a spin!](https://giqhub.com/eycjur/giqhub)
+
+## 🤝 Get Involved
+
+We ❤️ contributions! Found a bug? Have an awesome feature idea?
+
+- Open an **issue**
+- Submit a **pull request**
+
+Let’s build something amazing together! 💡
+
+Check out our [Contributing Guidelines](CONTRIBUTING.md) for details.  
+For insights into our architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## 📜 License
+
+giqhub is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+
+🚀 **Enhance your GitHub experience – start using giqhub today!**

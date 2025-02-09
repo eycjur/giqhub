@@ -1,135 +1,185 @@
 <script lang="ts">
-	import { GitHubDataSource, generateCachedOctokit } from '$lib/datasource/github';
 	import { GeminiLLM } from '$lib/llm/gemini';
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
 	import type { PageProps } from './$types';
-	import { LunrVectorDatabase } from '$lib/vectorDatabase/lunr';
-	import Icon from "@iconify/svelte";
-	import { UserMessage, AIMessage, ChatHistory } from '$lib/chat/chat.svelte';
-	import { marked } from 'marked';
-	import sanitizeHtml from 'sanitize-html';
+	import { LunrRetriever } from '$lib/retriever/lunr';
+	import ChatHistoryComponent from '$lib/components/ChatHistoryComponent.svelte';
+	import RepositorySummary from '$lib/components/RepositorySummary.svelte';
+	import RepositoryTitle from '$lib/components/RepositoryTitle.svelte';
+	import SampleQueries from '$lib/components/SampleQueries.svelte';
+	import * as m from '$lib/paraglide/messages';
+	import LinkButtonComponent from '$lib/components/LinkButtonComponent.svelte';
+	import { showTemporaryModal } from '$lib/components/showModal';
+	import GeminiModal from '$lib/components/GeminiModal.svelte';
+	import SettingPanel from '$lib/components/SettingPanel.svelte';
+	import { githubApiKey, llmType, chatGPTApiKey } from '$lib/stores';
+	import { isChrome } from '$lib/util';
+	import { dataSourceFactory } from '$lib/util';
+	import { RAG } from '$lib/rag/rag';
+	import Footer from '$lib/components/Footer.svelte';
+	import { ChatHistory } from '$lib/chat/chat.svelte';
+	import Icon from '@iconify/svelte';
+	import { LLMType } from '$lib/const';
+	import { ChatGPTLLM } from '$lib/llm/chatGPT';
+	import ChatGPTModal from '$lib/components/ChatGPTModal.svelte';
+
+	const systemPromptQuestionAnswer =
+		'You are clever guide for this repository. Respond briefly to user input. You can use Markdown to format your response.';
+	// Since it is a full text search, convert it to english so that the program can search it.
+	const systemPromptGenerateQuery = `Translate the user input into English and generate a search query that is optimized for searchability. Provide only the rewritten query without explanations.`;
 
 	let { data }: PageProps = $props();
 	let owner = data.owner;
 	let repo = data.repo;
 
-	let dataSource = new GitHubDataSource(owner, repo, generateCachedOctokit());
 	let query = $state('');
+	let repositoryDescription = $state(m.repository_initial_description());
+	let isLLMAvailable = $state(false);
+	let dataSource = dataSourceFactory(owner, repo, $githubApiKey);
+
+	let geminiLLM = new GeminiLLM(systemPromptQuestionAnswer);
+	let geminiLLMNoContext = new GeminiLLM(systemPromptGenerateQuery, false);
+	let chatgptLLM = new ChatGPTLLM(systemPromptQuestionAnswer, $chatGPTApiKey);
+	let chatgptLLMNoContext = new ChatGPTLLM(systemPromptGenerateQuery, $chatGPTApiKey, false);
+	let llm = $llmType === LLMType.gemini ? geminiLLM : chatgptLLM;
+	let llmNoContext = $llmType === LLMType.gemini ? geminiLLMNoContext : chatgptLLMNoContext;
+
 	let chatHistory = new ChatHistory();
-	let repositoryDescription = $state('Getting repository description...');
+	let lunrRetriever = new LunrRetriever();
+	let rag = new RAG(owner, repo, llm, llmNoContext, chatHistory, lunrRetriever);
 
-	let lunrVectorDatabase = new LunrVectorDatabase();
-	let gemini = new GeminiLLM("Respond briefly to user input.");
+	async function prepare() {
+		await dataSource.fetchData();
+		dataSource.dataContainer.split();
+		await lunrRetriever.setup(dataSource.dataContainer);
+		console.log('LunrRetriever setup done');
 
-	let sampleQueries = [
-		"What is the purpose of this repository?",
-		"How do I use this repository?",
-		"What are the features of this repository?"
-	];
+		// Note: If it is too long, it will take time, so limit it to 3000 characters.
+		// HACK: Update the system prompt to include the description.
+		const systemPrompt = `${systemPromptQuestionAnswer}\n\nHere is the description of the repository\n<description>${dataSource.description.slice(0, 3000)}</description>`;
+		llm.updateSystemPrompt(systemPrompt);
+		const summaryGenerator = await rag.generateRepositorySummary();
+		for await (const chunk of summaryGenerator) {
+			repositoryDescription = chunk;
+		}
+	}
 
-	async function handleSubmit(event: SubmitEvent | null = null) {
+	githubApiKey.subscribe((value) => {
+		dataSource = dataSourceFactory(owner, repo, value);
+		prepare();
+	});
+	// Note: For gemini, After changing the settings, the browser will be restarted, so no polling is necessary.
+	chatGPTApiKey.subscribe((value) => {
+		if ($llmType !== LLMType.chatgpt) {
+			return;
+		}
+		chatgptLLM = new ChatGPTLLM(systemPromptQuestionAnswer, value);
+		chatgptLLMNoContext = new ChatGPTLLM(systemPromptGenerateQuery, value, false);
+		llm = chatgptLLM;
+		llmNoContext = chatgptLLMNoContext;
+		chatgptLLM.available().then((value) => {
+			isLLMAvailable = value;
+		});
+		rag.updateLLM(llm, llmNoContext);
+		prepare();
+	});
+	llmType.subscribe((value) => {
+		if (value === LLMType.gemini) {
+			llm = geminiLLM;
+			llmNoContext = geminiLLMNoContext;
+		} else if (value === LLMType.chatgpt) {
+			llm = chatgptLLM;
+			llmNoContext = chatgptLLMNoContext;
+		} else {
+			throw new Error(`Unknown LLM type: ${value}`);
+		}
+		llm.available().then((value) => {
+			isLLMAvailable = value;
+		});
+		clearChatHistory();
+		rag.updateLLM(llm, llmNoContext);
+		prepare();
+	});
+
+	async function handleSubmit(queryInput: string, event: SubmitEvent | MouseEvent | null = null) {
 		if (event) {
 			event.preventDefault();
 		}
-		console.log("Query submitted:", query);
-		let searched_data = await lunrVectorDatabase.getDocuments(query);
-		let searched_data_str = "";
-		for (let i = 0; i < searched_data.length; i++) {
-			searched_data_str += `<item><path>${searched_data[i].path}</path><content>${searched_data[i].content}</content></item>\n`;
-		}
-		
-		let stream;
-		try {
-			stream = await gemini.invoke(`Please respond to the following query: \n<query>${query}</query>. Here is some context: \n<context>${searched_data_str}</context>`);
-			chatHistory.addMessage(new UserMessage(query));
-			chatHistory.addMessage(new AIMessage("Processing...", searched_data));
+		if (!rag.isLLMProcessing) {
 			query = '';
-			for await (const chunk of stream) {
-				chatHistory.updateLastContent(chunk);
-			}
-		} catch (e) {
-			console.error(e);
-			window.alert('Failed to communicate with Gemini');
-			return;
 		}
+		rag.query(queryInput, dataSource.description);
+	}
+
+	function clearChatHistory() {
+		chatHistory.clear();
+		llm.initSession();
 	}
 
 	onMount(async () => {
-		if (!(await gemini.available())) {
-			console.error('Gemini is not available');
-			window.alert('Gemini is not available');
-			goto('/');
+		if (!isChrome() && $llmType === LLMType.gemini) {
+			// HACK: Hiding other modals using z-index
+			showTemporaryModal(m.repository_not_supported_browser(), 'red', 2000, 5000);
+			llmType.set(LLMType.chatgpt);
 		}
 
-		await dataSource.fetchData();
-		dataSource.dataContainer.split();
-		await lunrVectorDatabase.setup(dataSource.dataContainer);
-		console.log("LunrVectorDatabase setup done");
-
-		// HACK: 長すぎると時間がかかるので1000文字までに制限
-		const stream = await gemini.invoke(`Please summarize the description of the repository ${owner}/${repo}.\n<description>${dataSource.description.slice(0, 1000)}</description>`);
-		for await (const chunk of stream) {
-			repositoryDescription = chunk;
-		}
+		isLLMAvailable = await llm.available();
 	});
 </script>
 
-<style>
-	.markdown-body {
-		overflow-x: auto;
-	}
-</style>
+<svelte:head>
+	<title>giqhub - {owner}/{repo}</title>
+</svelte:head>
 
-<div class="container mx-auto p-4">
-	<h1 class="text-4xl font-bold mb-4" style="white-space: nowrap;">
-		<a href="https://github.com/{owner}/{repo}" target="_blank" rel="noopener noreferrer" class="flex items-center">
-			{owner}/{repo}
-			<Icon icon="octicon:mark-github-16" class="mx-1"/>
-		</a>
-	</h1>
-	<div class="mb-4">
-		<h2 class="text-2xl font-bold mb-2">Repository Summary</h2>
-		<p>{repositoryDescription}</p>
-	</div>
+<div class="flex min-h-screen flex-col">
+	<div class="flex flex-1">
+		<div class="w-full p-4">
+			<div class="container mx-auto space-y-4 p-4">
+				<RepositoryTitle {owner} {repo} />
+				<RepositorySummary {repositoryDescription} />
 
-	<div class="mb-4">
-		<h2 class="text-2xl font-bold mb-4">Chat History</h2>
-		<div class="space-y-2">
-			{#each chatHistory.history as chat}
-				<div class="bg-gray-100 p-2 rounded markdown-body">
-					{#if chat instanceof UserMessage}
-						<Icon icon="mdi:user" class="inline-block mr-2"/>
-					{:else if chat instanceof AIMessage}
-						<Icon icon="mdi:brain" class="inline-block mr-2"/>
-					{/if}
-					{@html sanitizeHtml(marked(chat.content))}
-					{#each chat.getUniqueNameReferences() as item}
-						<button class="bg-gray-200 p-1 rounded m-1">
-							<a href="{item.url}" target="_blank" rel="noopener noreferrer" class="flex items-center">
-								<Icon icon="mdi:file" />
-								{item.name}
-							</a>
-						</button>
-					{/each}
-				</div>
-			{/each}
+				<ChatHistoryComponent {chatHistory} />
+				{#if chatHistory.history.length != 0}
+					<button
+						class="mx-auto mt-4 block rounded bg-gray-400 p-2 text-white"
+						onclick={() => {
+							clearChatHistory();
+						}}
+					>
+						<Icon icon="mdi:reload" class="mr-2 inline-block" />
+						{m.chat_history_new_conversation()}
+					</button>
+				{/if}
+
+				<form onsubmit={(event) => handleSubmit(query, event)} class="mt-4 flex space-x-2">
+					<input
+						type="text"
+						bind:value={query}
+						placeholder="Enter your query"
+						class="flex-1 rounded border p-2"
+					/>
+					<button
+						type="submit"
+						class="rounded bg-blue-500 p-2 text-white disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={!query}
+					>
+						Submit
+					</button>
+				</form>
+
+				<SampleQueries {handleSubmit} />
+			</div>
 		</div>
-		<form onsubmit={handleSubmit} class="mt-4 flex space-x-2">
-			<input type="text" bind:value={query} placeholder="Enter your query" class="border p-2 rounded flex-1" />
-			<button type="submit" class="bg-blue-500 text-white p-2 rounded">Submit</button>
-		</form>
+		<SettingPanel />
 	</div>
-
-	<div>
-		<h2 class="text-2xl font-bold mb-2">Sample query</h2>
-		{#each sampleQueries as sampleQuery}
-			<button onclick={
-				() => {
-					query = sampleQuery;
-					handleSubmit();
-				}
-			} class="bg-gray-200 text-gray-800 p-2 rounded mt-4 mx-1">{sampleQuery}</button>
-		{/each}
-	</div>
+	<Footer />
 </div>
+
+<LinkButtonComponent />
+
+{#if !isLLMAvailable && $llmType === LLMType.gemini}
+	<GeminiModal />
+{/if}
+{#if !isLLMAvailable && $llmType === LLMType.chatgpt}
+	<ChatGPTModal />
+{/if}

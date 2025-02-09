@@ -1,4 +1,7 @@
 export interface LLM {
 	available(): Promise<boolean>;
-	invoke: (systemPrompt: string, userPrompt: string) => Promise<string>;
+	updateSystemPrompt(systemPrompt: string): void;
+	ainvoke: (userPrompt: string) => Promise<string>;
+	astream: (userPrompt: string) => AsyncGenerator<string, void, unknown>;
+	initSession: () => void;
 }
